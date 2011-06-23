@@ -19,7 +19,8 @@
 #include <boost/bind.hpp>
 
 #include <signal.h>
-#include <sys/eventfd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 
 using namespace muduo;
 using namespace muduo::net;
@@ -29,17 +30,6 @@ namespace
 __thread EventLoop* t_loopInThisThread = 0;
 
 const int kPollTimeMs = 10000;
-
-int createEventfd()
-{
-  int evtfd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-  if (evtfd < 0)
-  {
-    LOG_SYSERR << "Failed in eventfd";
-    abort();
-  }
-  return evtfd;
-}
 
 #pragma GCC diagnostic ignored "-Wold-style-cast"
 class IgnoreSigPipe
@@ -63,11 +53,15 @@ EventLoop::EventLoop()
     callingPendingFunctors_(false),
     threadId_(CurrentThread::tid()),
     poller_(Poller::newDefaultPoller(this)),
-    timerQueue_(new TimerQueue(this)),
-    wakeupFd_(createEventfd()),
-    wakeupChannel_(new Channel(this, wakeupFd_))
+    timerQueue_(new TimerQueue(this))
 {
   LOG_TRACE << "EventLoop created " << this << " in thread " << threadId_;
+  if (::socketpair(AF_UNIX, SOCK_STREAM, 0, wakeupFd_) < 0)
+  {
+    LOG_SYSFATAL << "Failed in socketpair";
+  }
+  wakeupChannel_.reset(new Channel(this, wakeupFd_[0]));
+
   if (t_loopInThisThread)
   {
     LOG_FATAL << "Another EventLoop " << t_loopInThisThread
@@ -85,7 +79,8 @@ EventLoop::EventLoop()
 
 EventLoop::~EventLoop()
 {
-  ::close(wakeupFd_);
+  ::close(wakeupFd_[0]);
+  ::close(wakeupFd_[1]);
   t_loopInThisThread = NULL;
 }
 
@@ -100,11 +95,12 @@ void EventLoop::loop()
   while (!quit_)
   {
     activeChannels_.clear();
-    pollReturnTime_ = poller_->poll(kPollTimeMs, &activeChannels_);
+    pollReturnTime_ = poller_->poll(timerQueue_->getTimeout(), &activeChannels_);
     if (Logger::logLevel() <= Logger::TRACE)
     {
       printActiveChannels();
     }
+    timerQueue_->processTimers();
     // TODO sort channel by priority
     eventHandling_ = true;
     for (ChannelList::iterator it = activeChannels_.begin();
@@ -196,7 +192,7 @@ void EventLoop::abortNotInLoopThread()
 void EventLoop::wakeup()
 {
   uint64_t one = 1;
-  ssize_t n = sockets::write(wakeupFd_, &one, sizeof one);
+  ssize_t n = sockets::write(wakeupFd_[1], &one, sizeof one);
   if (n != sizeof one)
   {
     LOG_ERROR << "EventLoop::wakeup() writes " << n << " bytes instead of 8";
@@ -206,7 +202,7 @@ void EventLoop::wakeup()
 void EventLoop::handleRead()
 {
   uint64_t one = 1;
-  ssize_t n = sockets::read(wakeupFd_, &one, sizeof one);
+  ssize_t n = sockets::read(wakeupFd_[0], &one, sizeof one);
   if (n != sizeof one)
   {
     LOG_ERROR << "EventLoop::handleRead() reads " << n << " bytes instead of 8";

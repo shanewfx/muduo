@@ -49,6 +49,9 @@ class TimerQueue : boost::noncopyable
                    Timestamp when,
                    double interval);
 
+  int getTimeout() const;
+  void processTimers();
+
   // void cancel(TimerId timerId);
 
  private:
@@ -58,8 +61,6 @@ class TimerQueue : boost::noncopyable
   typedef std::set<Entry> TimerList;
 
   void scheduleInLoop(Timer* timer);
-  // called when timerfd arms
-  void handleRead();
   // move out all expired timers
   std::vector<Entry> getExpired(Timestamp now);
   void reset(const std::vector<Entry>& expired, Timestamp now);
@@ -67,9 +68,6 @@ class TimerQueue : boost::noncopyable
   bool insert(Timer* timer);
 
   EventLoop* loop_;
-  const int timerfd_;
-  Channel timerfdChannel_;
-  // Timer list sorted by expiration
   TimerList timers_;
 };
 
