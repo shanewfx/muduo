@@ -1,2 +1,2 @@
-add_executable(idleconnection_echo echo.cc main.cc)
+add_executable(idleconnection_echo EXCLUDE_FROM_ALL echo.cc main.cc)
 target_link_libraries(idleconnection_echo muduo_net)
